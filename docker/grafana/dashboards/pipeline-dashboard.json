@@ -1,0 +1,384 @@
+{
+  "title": "Sales Pipeline Observability",
+  "tags": ["pipeline", "sales", "airflow"],
+  "timezone": "browser",
+  "time": {
+    "from": "now-3h",
+    "to": "now"
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Airflow Health",
+      "type": "stat",
+      "targets": [
+        {
+          "expr": "up{job=\"airflow\"}",
+          "legendFormat": "Airflow Status"
+        }
+      ],
+      "gridPos": {"h": 6, "w": 6, "x": 0, "y": 0},
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "red", "value": null},
+              {"color": "green", "value": 1}
+            ]
+          },
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "1": {"text": "UP", "color": "green"},
+                "0": {"text": "DOWN", "color": "red"}
+              }
+            }
+          ]
+        }
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "value_and_name"
+      }
+    },
+    {
+      "id": 4,
+      "title": "MinIO Health",
+      "type": "stat",
+      "targets": [
+        {
+          "expr": "minio_cluster_health_status",
+          "legendFormat": "MinIO Status"
+        }
+      ],
+      "gridPos": {"h": 6, "w": 6, "x": 6, "y": 0},
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "red", "value": 0},
+              {"color": "green", "value": 1}
+            ]
+          },
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "1": {"text": "UP", "color": "green"},
+                "0": {"text": "DOWN", "color": "red"}
+              }
+            }
+          ]
+        }
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "value_and_name"
+      }
+    },
+    {
+      "id": 11,
+      "title": "Data Quality Status",
+      "type": "stat",
+      "targets": [
+        {
+          "expr": "sum(pipeline_data_quality_failures_total)",
+          "legendFormat": "Failures"
+        }
+      ],
+      "gridPos": {"h": 6, "w": 6, "x": 12, "y": 0},
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "green", "value": 0},
+              {"color": "yellow", "value": 1},
+              {"color": "red", "value": 5}
+            ]
+          },
+          "mappings": [
+            {
+              "type": "special",
+              "options": {
+                "match": "null",
+                "result": {"text": "PASS", "color": "green"}
+              }
+            }
+          ]
+        }
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "textMode": "value_and_name"
+      }
+    },
+    {
+      "id": 5,
+      "title": "MinIO Storage Used",
+      "type": "stat",
+      "targets": [
+        {
+          "expr": "(minio_cluster_capacity_raw_total_bytes - minio_cluster_capacity_raw_free_bytes) / 1024 / 1024 / 1024",
+          "legendFormat": "Storage (GB)"
+        }
+      ],
+      "gridPos": {"h": 6, "w": 6, "x": 18, "y": 0},
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 2,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "green", "value": null},
+              {"color": "yellow", "value": 50},
+              {"color": "red", "value": 80}
+            ]
+          }
+        }
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "textMode": "value_and_name"
+      }
+    },
+    {
+      "id": 2,
+      "title": "DAG Run Duration (avg)",
+      "type": "gauge",
+      "targets": [
+        {
+          "expr": "airflow_dagrun_duration_success_sales_delta_pipeline_sum / airflow_dagrun_duration_success_sales_delta_pipeline_count",
+          "legendFormat": "Duration"
+        }
+      ],
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 6},
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "min": 0,
+          "max": 30,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "green", "value": null},
+              {"color": "yellow", "value": 15},
+              {"color": "red", "value": 25}
+            ]
+          }
+        }
+      },
+      "options": {
+        "showThresholdLabels": true,
+        "showThresholdMarkers": true
+      }
+    },
+    {
+      "id": 8,
+      "title": "Task Duration by Stage (avg)",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "airflow_dag_sales_delta_pipeline_ingest_to_bronze_duration_sum / airflow_dag_sales_delta_pipeline_ingest_to_bronze_duration_count",
+          "legendFormat": "Ingest",
+          "refId": "A"
+        },
+        {
+          "expr": "airflow_dag_sales_delta_pipeline_transform_to_silver_duration_sum / airflow_dag_sales_delta_pipeline_transform_to_silver_duration_count",
+          "legendFormat": "Clean",
+          "refId": "B"
+        },
+        {
+          "expr": "airflow_dag_sales_delta_pipeline_validate_data_quality_duration_sum / airflow_dag_sales_delta_pipeline_validate_data_quality_duration_count",
+          "legendFormat": "Validate",
+          "refId": "C"
+        },
+        {
+          "expr": "airflow_dag_sales_delta_pipeline_aggregate_to_gold_duration_sum / airflow_dag_sales_delta_pipeline_aggregate_to_gold_duration_count",
+          "legendFormat": "Aggregate",
+          "refId": "D"
+        }
+      ],
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 6},
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "fillOpacity": 20,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "log"
+            },
+            "gradientMode": "opacity"
+          }
+        }
+      },
+      "options": {
+        "tooltip": {"mode": "multi"},
+        "legend": {"displayMode": "table", "placement": "right", "calcs": ["mean", "last"]}
+      }
+    },
+    {
+      "id": 6,
+      "title": "Sales Records Processed by Layer",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "pipeline_records_processed_total{layer=\"bronze\"}",
+          "legendFormat": "{{layer}}"
+        },
+        {
+          "expr": "pipeline_records_processed_total{layer=\"silver\"}",
+          "legendFormat": "{{layer}}"
+        },
+        {
+          "expr": "pipeline_records_processed_total{layer=\"gold\"}",
+          "legendFormat": "{{table}} (Gold)"
+        }
+      ],
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 14},
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 80,
+            "barAlignment": 0
+          }
+        }
+      },
+      "options": {
+        "tooltip": {"mode": "multi"},
+        "legend": {"displayMode": "table", "placement": "bottom"}
+      }
+    },
+    {
+      "id": 7,
+      "title": "Gold Tables Rows",
+      "type": "bargauge",
+      "targets": [
+        {
+          "expr": "pipeline_delta_table_rows",
+          "legendFormat": "{{table_name}}"
+        }
+      ],
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 20},
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "palette-classic",
+            "steps": [
+              {"color": "blue", "value": null},
+              {"color": "green", "value": 500},
+              {"color": "yellow", "value": 1000}
+            ]
+          }
+        }
+      },
+      "options": {
+        "orientation": "horizontal",
+        "displayMode": "lcd",
+        "showUnfilled": true
+      }
+    },
+    {
+      "id": 10,
+      "title": "MinIO S3 Requests",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "sum(rate(minio_s3_requests_total[5m]))",
+          "legendFormat": "Total"
+        },
+        {
+          "expr": "sum(rate(minio_s3_requests_errors_total[5m]))",
+          "legendFormat": "Errors"
+        },
+        {
+          "expr": "sum(rate(minio_s3_requests_total[5m])) - sum(rate(minio_s3_requests_errors_total[5m]))",
+          "legendFormat": "Successful"
+        }
+      ],
+      "gridPos": {"h": 8, "w": 24, "x": 0, "y": 22},
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "fillOpacity": 20,
+            "stacking": {"mode": "none"},
+            "scaleDistribution": {
+              "type": "symlog"
+            },
+            "gradientMode": "hue"
+          }
+        }
+          ,
+          "overrides": [
+              {
+                "matcher": {
+                  "id": "byRegexp",
+                  "options": "Successful"
+                },
+                "properties": [
+                  {
+                    "id": "color",
+                    "value": {
+                      "fixedColor": "dark-green",
+                      "mode": "fixed"
+                    }
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byRegexp",
+                  "options": "Total"
+                },
+                "properties": [
+                  {
+                    "id": "color",
+                    "value": {
+                      "fixedColor": "dark-yellow",
+                      "mode": "fixed"
+                    }
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byRegexp",
+                  "options": "Errors"
+                },
+                "properties": [
+                  {
+                    "id": "color",
+                    "value": {
+                      "fixedColor": "dark-red",
+                      "mode": "fixed"
+                    }
+                  }
+                ]
+              }
+          ]
+      },
+      "options": {
+        "tooltip": {"mode": "multi"},
+        "legend": {"displayMode": "list", "placement": "bottom"}
+      }
+    }
+  ],
+  "refresh": "10s",
+  "schemaVersion": 27,
+  "version": 2
+}

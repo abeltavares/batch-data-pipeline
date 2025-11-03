@@ -1,0 +1,398 @@
+x-airflow-common: &airflow-common
+  build: ./docker/airflow
+  environment:
+    &airflow-common-env
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__CORE__FERNET_KEY: ""
+    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "false"
+    AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres-airflow/airflow
+    AIRFLOW__API__AUTH_BACKEND: airflow.api.auth.backend.basic_auth
+    AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: "true"
+    
+    # StatsD Metrics
+    AIRFLOW__SCHEDULER__STATSD_ON: "true"
+    AIRFLOW__SCHEDULER__STATSD_HOST: statsd-exporter
+    AIRFLOW__SCHEDULER__STATSD_PORT: 9125
+    AIRFLOW__SCHEDULER__STATSD_PREFIX: airflow
+    AIRFLOW__METRICS__STATSD_ON: "true"
+    AIRFLOW__METRICS__STATSD_HOST: statsd-exporter
+    AIRFLOW__METRICS__STATSD_PORT: 9125
+    AIRFLOW__METRICS__STATSD_PREFIX: airflow
+    
+    # OpenLineage Configuration
+    AIRFLOW__OPENLINEAGE__TRANSPORT: '{"type": "http", "url": "http://marquez:5000", "endpoint": "api/v1/lineage"}'
+    AIRFLOW__OPENLINEAGE__NAMESPACE: "duckmesh-sales"
+    AIRFLOW__OPENLINEAGE__DISABLED: "false"
+    AIRFLOW__OPENLINEAGE__DISABLED_FOR_OPERATORS: ""
+    
+    PYTHONPATH: /opt/airflow
+  # S3 credentials for DuckDB/MinIO access (move to .env for security)
+    S3_ENDPOINT: minio:9000
+    S3_ACCESS_KEY: minioadmin
+    S3_SECRET_KEY: minioadmin
+  volumes:
+    - ./airflow/dags:/opt/airflow/dags
+    - ./airflow/logs:/opt/airflow/logs
+    - ./src:/opt/airflow/src
+    - ./config:/opt/airflow/config
+    - ./soda:/opt/airflow/soda
+  user: "1000:0"
+  depends_on: &airflow-common-depends-on
+    postgres-airflow:
+      condition: service_healthy
+
+services:
+  # ==================== DATA INFRASTRUCTURE ====================
+  
+  postgres-airflow:
+    image: postgres:16
+    container_name: postgres-airflow
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow
+    ports:
+      - "5433:5432"
+    volumes:
+      - airflow-db-volume:/var/lib/postgresql/data
+      - ./docker/marquez/init-marquez-db.sh:/docker-entrypoint-initdb.d/init-marquez-db.sh
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "airflow"]
+      interval: 10s
+      retries: 5
+      start_period: 5s
+    restart: always
+    networks:
+      - airflow-network
+
+  minio:
+    image: minio/minio
+    container_name: minio
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+      MINIO_PROMETHEUS_AUTH_TYPE: public
+    volumes:
+      - minio_data:/data
+    command: server /data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: always
+    networks:
+      - airflow-network
+
+  mc:
+    image: minio/mc
+    container_name: mc
+    depends_on:
+      - minio
+    networks:
+      - airflow-network
+    entrypoint: >
+      /bin/sh -c "
+      until (/usr/bin/mc alias set minio http://minio:9000 minioadmin minioadmin) do echo '...waiting...' && sleep 1; done;
+      /usr/bin/mc mb minio/bronze;
+      /usr/bin/mc mb minio/silver;
+      /usr/bin/mc mb minio/gold;
+      /usr/bin/mc anonymous set public minio/bronze;
+      /usr/bin/mc anonymous set public minio/silver;
+      /usr/bin/mc anonymous set public minio/gold;
+      tail -f /dev/null
+      "
+
+  marquez:
+    image: marquezproject/marquez:latest
+    container_name: marquez
+    ports:
+      - "5000:5000"
+      - "5001:5001"
+    environment:
+      MARQUEZ_CONFIG: /usr/src/app/marquez.yml
+    volumes:
+      - ./docker/marquez/marquez.yml:/usr/src/app/marquez.yml
+    depends_on:
+      postgres-airflow:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/api/v1/namespaces"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s  # Increased to give more time for migrations
+    restart: always
+    networks:
+      - airflow-network
+
+  marquez-web:
+    image: marquezproject/marquez-web:latest
+    container_name: marquez-web
+    ports:
+      - "3002:3000"  # Using 3002 since 3000 is Metabase, 3001 is Grafana
+    environment:
+      - MARQUEZ_HOST=marquez
+      - MARQUEZ_PORT=5000
+      - WEB_PORT=3000
+    depends_on:
+      marquez:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:3000"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    restart: always
+    networks:
+      - airflow-network
+
+  # ==================== AIRFLOW ====================
+  
+  airflow-webserver:
+    <<: *airflow-common
+    container_name: airflow-webserver
+    command: webserver
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: always
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+    networks:
+      - airflow-network
+
+  airflow-scheduler:
+    <<: *airflow-common
+    container_name: airflow-scheduler
+    command: scheduler
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8974/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: always
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+    networks:
+      - airflow-network
+
+  airflow-init:
+    <<: *airflow-common
+    container_name: airflow-init
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - |
+        mkdir -p /sources/logs /sources/dags /sources/plugins
+        chown -R "${AIRFLOW_UID}:0" /sources/{logs,dags,plugins}
+        exec /entrypoint airflow version
+    environment:
+      <<: *airflow-common-env
+      AIRFLOW_UID: "50000"
+      _AIRFLOW_DB_UPGRADE: "true"
+      _AIRFLOW_WWW_USER_CREATE: "true"
+      _AIRFLOW_WWW_USER_USERNAME: ${_AIRFLOW_WWW_USER_USERNAME:-admin}
+      _AIRFLOW_WWW_USER_PASSWORD: ${_AIRFLOW_WWW_USER_PASSWORD:-admin}
+    user: "0:0"
+    volumes:
+      - ${AIRFLOW_PROJ_DIR:-.}:/sources
+    networks:
+      - airflow-network
+
+  # ==================== ANALYTICS ====================
+  
+  metabase:
+    build:
+      context: ./docker/metabase
+    container_name: metabase
+    ports:
+      - "3000:3000"
+    depends_on:
+      - minio
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000"]
+      interval: 30s
+      retries: 3
+    restart: always
+    networks:
+      - airflow-network
+
+  metabase-setup:
+    image: alpine:3.21
+    container_name: metabase-setup
+    networks:
+      - airflow-network
+    depends_on:
+      metabase:
+        condition: service_healthy
+      trino:
+        condition: service_healthy
+      trino-init:
+        condition: service_completed_successfully 
+    volumes:
+      - ./docker/metabase/setup-metabase.sh:/setup.sh
+    command: >
+      /bin/sh -c "
+      apk add --no-cache bash curl jq &&
+      sh /setup.sh &&
+      sleep infinity
+      "
+    restart: "no"
+
+  trino:
+    image: trinodb/trino:latest
+    container_name: trino
+    ports:
+      - "8081:8081"
+    volumes:
+      - ./docker/trino/catalog:/etc/trino/catalog
+      - ./docker/trino/config.properties:/etc/trino/config.properties
+    environment:
+      - TRINO_ENVIRONMENT=production
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8081/v1/info"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    networks:
+      - airflow-network
+    depends_on:
+      - minio
+
+  trino-init:
+    image: trinodb/trino:latest
+    container_name: trino-init
+    depends_on:
+      - trino
+      - minio
+    volumes:
+      - ./docker/trino/catalog:/etc/trino/catalog
+      - ./docker/trino/config.properties:/etc/trino/config.properties
+      - ./docker/trino/init-tables.sql:/init-tables.sql
+    entrypoint: >
+      /bin/sh -c "
+      echo 'Waiting for Trino...' &&
+      for i in \$$(seq 1 30); do
+        trino --server trino:8081 --execute 'SELECT 1' 2>/dev/null && break || sleep 2;
+      done &&
+      echo 'Waiting for Gold tables in MinIO...' &&
+      for i in \$$(seq 1 60); do
+        HTTP_CODE=\$$(curl -s -o /dev/null -w '%{http_code}' http://minio:9000/gold/daily_sales_summary/_delta_log/00000000000000000000.json);
+        if [ \"\$$HTTP_CODE\" = \"200\" ]; then
+          echo 'Gold tables found!' &&
+          break;
+        fi;
+        echo \"Check \$$i/60: Gold tables not ready yet...\" &&
+        sleep 15;
+      done &&
+      echo 'Registering tables in Trino...' &&
+      trino --server trino:8081 --file /init-tables.sql || echo 'Init failed, will retry on restart'
+      "
+    networks:
+      - airflow-network
+    restart: on-failure
+
+  # ==================== OBSERVABILITY ====================
+  
+  statsd-exporter:
+    image: prom/statsd-exporter:v0.26.0
+    container_name: statsd-exporter
+    ports:
+      - "9102:9102"  # Prometheus metrics endpoint
+      - "9125:9125/udp"  # StatsD UDP port
+    volumes:
+      - ./docker/statsd/statsd_mapping.yml:/tmp/statsd_mapping.yml
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:9102/metrics"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    command:
+      - '--statsd.mapping-config=/tmp/statsd_mapping.yml'
+      - '--statsd.listen-udp=:9125'
+      - '--web.listen-address=:9102'
+    restart: always
+    networks:
+      - airflow-network
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./docker/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus-data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=30d'
+      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
+      - '--web.console.templates=/usr/share/prometheus/consoles'
+    restart: always
+    networks:
+      - airflow-network
+      
+  prometheus-pushgateway:
+    image: prom/pushgateway:latest
+    container_name: prometheus-pushgateway
+    ports:
+      - "9091:9091"
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:9091/-/healthy"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: always
+    networks:
+      - airflow-network
+
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    ports:
+      - "3001:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_SERVER_ROOT_URL=http://localhost:3001
+      - GF_INSTALL_PLUGINS=grafana-piechart-panel
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./docker/grafana/provisioning:/etc/grafana/provisioning
+      - ./docker/grafana/dashboards:/var/lib/grafana/dashboards
+    depends_on:
+      - prometheus
+    restart: always
+    networks:
+      - airflow-network
+
+volumes:
+  airflow-db-volume:
+  minio_data:
+  prometheus-data:
+  grafana-data:
+  loki-data:
+
+networks:
+  airflow-network:

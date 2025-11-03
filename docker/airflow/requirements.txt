@@ -1,0 +1,33 @@
+# Core dependencies
+apache-airflow==2.9.0
+apache-airflow-providers-openlineage==1.14.0
+apache-airflow-providers-postgres==5.13.1
+duckdb==1.0.0
+deltalake==0.17.0
+pyarrow==14.0.0
+
+# Storage
+boto3==1.26.0
+
+# Database
+psycopg2-binary==2.9.9
+
+# Data validation
+pydantic==2.5.0
+
+# Data quality
+soda-core==3.3.0
+soda-core-duckdb==3.3.0
+
+# Data generation
+faker==22.0.0
+faker-commerce==1.0.4
+
+# Configuration
+pyyaml==6.0.1
+
+# Observability
+prometheus-client==0.19.0
+ 
+# Data processing
+pandas==2.2.0
