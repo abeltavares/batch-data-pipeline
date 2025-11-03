@@ -1,0 +1,106 @@
+checks for sales_silver:
+  # ============================================
+  # VOLUME CHECKS
+  # ============================================
+  - row_count > 0:
+      name: Table has data
+
+  - row_count < 10000:
+      name: Prevent data explosion
+
+  # ============================================
+  # SCHEMA VALIDATION
+  # ============================================
+  - schema:
+      name: Ensure sales schema integrity
+      fail:
+        when required column missing:
+          - transaction_id
+          - customer_id
+          - product_id
+          - quantity
+          - unit_price
+          - total_amount
+          - transaction_timestamp
+          - payment_method
+          - status
+
+  # ============================================
+  # COMPLETENESS CHECKS
+  # ============================================
+  - missing_count(transaction_id) = 0:
+      name: No missing transaction IDs
+
+  - missing_count(customer_id) = 0:
+      name: No missing customer IDs
+
+  - missing_count(product_id) = 0:
+      name: No missing product IDs
+
+  - missing_count(transaction_timestamp) = 0:
+      name: No missing timestamps
+
+  # ============================================
+  # BUSINESS RULE VALIDATION
+  # ============================================
+  - failed rows:
+      name: No negative quantities
+      fail condition: quantity <= 0
+
+  - failed rows:
+      name: No negative amounts
+      fail condition: total_amount <= 0
+
+  - failed rows:
+      name: No zero quantities
+      fail condition: quantity = 0
+
+  - failed rows:
+      name: Total amount matches calculation
+      fail condition: ABS(total_amount - (quantity * unit_price)) > 0.01
+
+  # ============================================
+  # DUPLICATE DETECTION
+  # ============================================
+  - duplicate_count(transaction_id) = 0:
+      name: No duplicate transactions
+
+  # ============================================
+  # FRESHNESS CHECK
+  # ============================================
+  - freshness(transaction_timestamp) < 2h:
+      name: Data is recent (within 2 hours)
+
+  # ============================================
+  # VALID VALUES
+  # ============================================
+  - failed rows:
+      name: Valid payment methods
+      fail condition: payment_method NOT IN ('credit_card', 'debit_card', 'cash', 'digital_wallet')
+
+  - failed rows:
+      name: Valid status values
+      fail condition: status NOT IN ('completed', 'pending', 'cancelled')
+
+  # ============================================
+  # STATISTICAL CHECKS (Simple Ranges)
+  # ============================================
+  - avg(total_amount) between 50 and 2000:
+      name: Average transaction value in expected range
+
+  - avg(quantity) between 1 and 10:
+      name: Average quantity in expected range
+
+  - max(total_amount) < 5000:
+      name: No extremely high transactions (fraud detection)
+
+  # ============================================
+  # REFERENTIAL INTEGRITY
+  # ============================================
+  - failed rows:
+      name: Product ID in valid range
+      fail condition: product_id < 1 OR product_id > 50
+
+  - failed rows:
+      name: Customer ID in valid range
+      fail condition: customer_id < 1 OR customer_id > 1000
